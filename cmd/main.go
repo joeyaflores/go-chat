@@ -1,14 +1,26 @@
 package main
 
 import (
-  "log"
+	"log"
+	"os"
 
-  "github.com/joeyaflores/go-chat/internal/web"
-  "github.com/joeyaflores/go-chat/internal/rbmq"
+	"github.com/joeyaflores/go-chat/internal/db"
+	"github.com/joeyaflores/go-chat/internal/rbmq"
+	"github.com/joeyaflores/go-chat/internal/web"
+	"github.com/joho/godotenv"
 )
 
 func main() {
-  log.Printf("app started")
-  go rbmq.Start()
-  web.Start()
+	log.Printf("Starting server...")
+	err := godotenv.Load("../.env")
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	uri := os.Getenv("MONGODB_URI")
+	db.Connect(uri)
+
+	go rbmq.Start()
+
+	web.Start()
 }
