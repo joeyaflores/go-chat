@@ -20,7 +20,8 @@ func main() {
 	uri := os.Getenv("MONGODB_URI")
 	db.Connect(uri)
 
-	go rbmq.Start()
+	rabbitmqURI := os.Getenv("RABBITMQ_URI")
+	go rbmq.Start(rabbitmqURI)
 
 	web.Start()
 }

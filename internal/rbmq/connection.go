@@ -1,54 +1,90 @@
 package rbmq
 
 import (
-  "log"
-  "fmt"
-  "os"
-  "os/signal"
-  "syscall"
-  rabbitmq "github.com/wagslane/go-rabbitmq"
- ) 
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-func Start() {
-  conn, err := rabbitmq.NewConn(
-    "amqp://user:password@localhost",
-    rabbitmq.WithConnectionOptionsLogging,
-  )
-  if err != nil {
-    log.Fatal(err)
-  }
-  defer conn.Close()
+	rabbitmq "github.com/wagslane/go-rabbitmq"
+)
 
-  consumer, err := rabbitmq.NewConsumer(
-    conn,
-    func(d rabbitmq.Delivery) rabbitmq.Action {
-      log.Printf("consumed: %v", string(d.Body))
-       // rabbitmq.Ack, rabbitmq.NackDiscard, rabbitmq.NackRequeue
-      return rabbitmq.Ack
-    },
-    "my_queue",
-    rabbitmq.WithConsumerOptionsRoutingKey("my_routing_key"),
-    rabbitmq.WithConsumerOptionsExchangeName("events"),
-    rabbitmq.WithConsumerOptionsExchangeDeclare,
-  )
-  if err != nil {
-    log.Fatal(err)
-  }
-  defer consumer.Close()
-  // block main thread - wait for shutdown signal
-  sigs := make(chan os.Signal, 1)
-  done := make(chan bool, 1)
+func Start(rabbitmqURI string) {
+	conn, err := rabbitmq.NewConn(
+		rabbitmqURI,
+		rabbitmq.WithConnectionOptionsLogging,
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
 
-  signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	consumer, err := rabbitmq.NewConsumer(
+		conn,
+		func(d rabbitmq.Delivery) rabbitmq.Action {
+			log.Printf("consumed: %v", string(d.Body))
+			// rabbitmq.Ack, rabbitmq.NackDiscard, rabbitmq.NackRequeue
+			return rabbitmq.Ack
+		},
+		"my_queue",
+		rabbitmq.WithConsumerOptionsRoutingKey("my_routing_key"),
+		rabbitmq.WithConsumerOptionsExchangeName("events"),
+		rabbitmq.WithConsumerOptionsExchangeDeclare,
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer consumer.Close()
 
-  go func() {
-    sig := <-sigs
-    fmt.Println()
-    fmt.Println(sig)
-    done <- true
-  }()
+	// block main thread - wait for shutdown signal
+	sigs := make(chan os.Signal, 1)
+	done := make(chan bool, 1)
 
-  fmt.Println("awaiting signal")
-  <-done
-  fmt.Println("stopping consumer")
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	publisher, err := rabbitmq.NewPublisher(
+		conn,
+		rabbitmq.WithPublisherOptionsLogging,
+		rabbitmq.WithPublisherOptionsExchangeName("events"),
+		rabbitmq.WithPublisherOptionsExchangeDeclare,
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer publisher.Close()
+	go func() {
+		sig := <-sigs
+		fmt.Println()
+		fmt.Println(sig)
+		done <- true
+	}()
+
+	fmt.Println("awaiting signal")
+	<-done
+	fmt.Println("stopping consumer")
+
+	ticker := time.NewTicker(time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			err = publisher.PublishWithContext(
+				context.Background(),
+				[]byte("hello, world"),
+				[]string{"my_routing_key"},
+				rabbitmq.WithPublishOptionsContentType("application/json"),
+				rabbitmq.WithPublishOptionsMandatory,
+				rabbitmq.WithPublishOptionsPersistentDelivery,
+				rabbitmq.WithPublishOptionsExchange("events"),
+			)
+			if err != nil {
+				log.Println(err)
+			}
+		case <-done:
+			fmt.Println("stopping publisher")
+			return
+		}
+	}
 }
